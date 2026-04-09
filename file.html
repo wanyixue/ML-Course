@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>验证中...</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.1.1/crypto-js.min.js"></script>
+    <style>
+
+        body, html {
+            height: 100%;
+            margin: 0;
+            font-family: Arial, sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            background-color: #f0f0f0;
+        }
+
+        /* 模态框背景 */
+        .modal-bg {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.5);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        /* 模态框 */
+        .modal {
+            background-color: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            text-align: center;
+        }
+
+        /* 输入框样式 */
+        .modal input {
+            width: 80%;
+            padding: 10px;
+            margin-top: 15px;
+            margin-bottom: 20px;
+            font-size: 16px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+        }
+
+        /* 模态框的按钮 */
+        .modal button {
+            padding: 10px 20px;
+            font-size: 16px;
+            cursor: pointer;
+            background-color: #28A745;
+            color: white;
+            border: none;
+            border-radius: 5px;
+        }
+
+
+        /* 进度条容器 */
+        #progressContainer {
+            width: 80%;
+            background-color: #f3f3f3;
+            border-radius: 5px;
+            margin: 20px auto;
+            display: none;
+        }
+
+        /* 进度条 */
+        #progressBar {
+            width: 0;
+            height: 20px;
+            background-color: #28A745;
+            border-radius: 5px;
+        }
+
+        /* 隐藏 */
+        .hidden {
+            display: none;
+        }
+    </style>
+</head>
+
+<body>
+
+<!-- 模态框背景 -->
+<div class="modal-bg">
+    <div class="modal">
+        <h2 id="tip">请输入密码解锁文件</h2>
+        <input type="password" id="key" placeholder="Enter password"/>
+        <br/>
+        <button id="downloadBtn">下载</button>
+        <!-- 进度条容器 -->
+        <div id="progressContainer">
+            <div id="progressBar"></div>
+        </div>
+    </div>
+</div>
+</body>
+
+<script>
+    // 显示进度条
+    var progressContainer = document.getElementById("progressContainer");
+    var progressBar = document.getElementById("progressBar");
+    var btn = document.getElementById("downloadBtn");
+    var tip = document.getElementById("tip")
+    progressContainer.style.display = "none";
+
+    // AES decryption function using CBC mode and zero IV
+    function aesDecryptText(encryptedText, key) {
+        const encryptedBytes = CryptoJS.enc.Hex.parse(encryptedText);
+        const derivedKey = CryptoJS.MD5(key);
+        const iv = CryptoJS.enc.Hex.parse('00000000000000000000000000000000');
+        try {
+            const decrypted = CryptoJS.AES.decrypt(
+                {ciphertext: encryptedBytes},
+                derivedKey,
+                {iv: iv, mode: CryptoJS.mode.CBC, padding: CryptoJS.pad.Pkcs7}
+            );
+            return decrypted.toString(CryptoJS.enc.Utf8);
+        } catch (e) {
+            console.error("Decryption failed:", e);
+            return null;
+        }
+    }
+
+
+    // 解密文件函数
+    async function aesDecryptFile(url, key, fileName) {
+        // 将 key 转换为 MD5 hash 以匹配加密时的 derive_key_md5
+        var md5Key = CryptoJS.MD5(key).toString(CryptoJS.enc.Hex);
+        // 获取加密文件的内容（这是一个异步请求）
+        await fetch(url)
+            .then(function (response) {
+                if (!response.ok) {
+                    throw new Error('Network response was not ok');
+                }
+                // 获取总大小
+                const contentLength = response.headers.get('content-length');
+                if (!contentLength) {
+                    throw new Error('Content-Length response header unavailable');
+                }
+                const total = parseInt(contentLength, 10);
+                let loaded = 0;
+                const reader = response.body.getReader();
+                // 使用流式传输获取数据并更新进度条
+                return new ReadableStream({
+                    start(controller) {
+                        function push() {
+                            reader.read().then(({done, value}) => {
+                                if (done) {
+                                    controller.close();
+                                    return;
+                                }
+
+                                // 更新进度
+                                loaded += value.byteLength;
+                                const percent = (loaded / total) * 100;
+                                progressBar.style.width = percent + "%";
+
+                                // 推送数据
+                                controller.enqueue(value);
+                                push();
+                            });
+                        }
+
+                        push();
+                    }
+                });
+            }).then(stream => new Response(stream))
+            .then(response => response.arrayBuffer())
+            .then(data => {
+                // 创建一个 Uint8Array 以便处理二进制数据
+                var encryptedBytes = new Uint8Array(data);
+
+                // 读取前 16 字节作为 IV
+                var ivBytes = encryptedBytes.slice(0, 16);
+
+                // 剩余部分是密文
+                var cipherTextBytes = encryptedBytes.slice(16);
+
+                // 将 IV 和密文转换为 WordArray 格式，CryptoJS 可以处理该格式
+                var iv = CryptoJS.lib.WordArray.create(ivBytes);
+                var cipherText = CryptoJS.lib.WordArray.create(cipherTextBytes);
+
+                // 使用 AES-CBC 解密
+                var decrypted = CryptoJS.AES.decrypt(
+                    {ciphertext: cipherText},
+                    CryptoJS.enc.Hex.parse(md5Key),
+                    {iv: iv, mode: CryptoJS.mode.CBC, padding: CryptoJS.pad.Pkcs7}
+                );
+
+                // 将解密后的数据转换为 Uint8Array（二进制格式）
+                var decryptedBytes = new Uint8Array(decrypted.sigBytes);
+                for (var i = 0; i < decrypted.sigBytes; i++) {
+                    decryptedBytes[i] = decrypted.words[i >>> 2] >>> 24 - (i % 4) * 8 & 0xff;
+                }
+
+                // 创建 Blob 对象，并触发文件下载
+                var blob = new Blob([decryptedBytes], {type: 'application/octet-stream'});
+                var link = document.createElement('a');
+                link.href = URL.createObjectURL(blob);
+                link.download = fileName;  // 指定下载文件的名称
+                document.body.appendChild(link);
+                link.click();  // 触发下载
+                document.body.removeChild(link);  // 移除临时链接
+            })
+            .catch(error => {
+                console.error('解密过程中出现错误:', error);
+            });
+    }
+
+    btn.addEventListener("click", async () => {
+        const password = document.getElementById('key').value;
+        if (!password) {
+            alert("请输入密码！");
+            return;
+        }
+        const urlParams = new URLSearchParams(window.location.search);
+        const encryptedUrl = urlParams.get("d");
+        const url = aesDecryptText(encryptedUrl, password)
+        if (!url) {
+            alert("密码错误，请重试！")
+            return;
+        }
+        progressContainer.style.display = "block";
+        btn.classList.add("hidden");
+        document.getElementById("key").classList.add("hidden");
+        tip.innerText = "下载中..."
+        await aesDecryptFile(url, password, url.substring(0, url.length - 4))
+        tip.innerText = "下载完成"
+    })
+</script>
+</html>
